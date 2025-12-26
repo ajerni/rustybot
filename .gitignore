@@ -72,3 +72,4 @@ curl_test.txt
 *.bak
 *.backup
 
+.htaccess

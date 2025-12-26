@@ -14,6 +14,7 @@ use actix_cors::Cors;
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::sync::Arc;
+use serde_json::json;
 
 #[derive(Deserialize)]
 struct CompletionRequest {
@@ -62,6 +63,60 @@ async fn greeter_with_name(nameparam: web::Path<String>) -> HttpResponse {
 
 async fn greeter_default() -> HttpResponse {
     HttpResponse::Ok().body("Hello, world!")
+}
+
+async fn groqlive(req: web::Json<CompletionRequest>) -> ActixResult<HttpResponse> {
+    let api_key = env::var("GROQ_API_KEY")
+        .map_err(|_| actix_web::error::ErrorInternalServerError("GROQ_API_KEY not set"))?;
+
+    let client = reqwest::Client::new();
+    
+    let request_body = json!({
+        "model": "groq/compound-mini",
+        "messages": [{
+            "role": "user",
+            "content": req.question
+        }]
+    });
+
+    let response = client
+        .post("https://api.groq.com/openai/v1/chat/completions")
+        .header("Content-Type", "application/json")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .json(&request_body)
+        .send()
+        .await
+        .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Request failed: {}", e)))?;
+
+    let status = response.status();
+    
+    if !status.is_success() {
+        let error_body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
+        return Ok(HttpResponse::build(status)
+            .content_type("application/json")
+            .json(json!({ "error": error_body })));
+    }
+
+    let groq_response: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| actix_web::error::ErrorInternalServerError(format!("Failed to parse response: {}", e)))?;
+
+    // Extract the answer from Groq's response format
+    let answer = groq_response
+        .get("choices")
+        .and_then(|choices| choices.as_array())
+        .and_then(|arr| arr.get(0))
+        .and_then(|choice| choice.get("message"))
+        .and_then(|msg| msg.get("content"))
+        .and_then(|content| content.as_str())
+        .unwrap_or("No answer received")
+        .to_string();
+
+    Ok(HttpResponse::Ok().json(CompletionResponse { answer }))
 }
 
 #[actix_web::main]
@@ -135,6 +190,7 @@ async fn main() -> anyhow::Result<()> {
             .wrap(Logger::default())
             .app_data(web::Data::new(app_state.clone()))
             .route("/completion", web::post().to(completion))
+            .route("/groqlive", web::post().to(groqlive))
             // Register /name route BEFORE static files to avoid route conflicts
             .service(
                 web::scope("/name")

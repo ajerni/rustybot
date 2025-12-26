@@ -1530,6 +1530,7 @@ dependencies = [
  "dotenv",
  "llm-chain",
  "llm-chain-openai",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",
